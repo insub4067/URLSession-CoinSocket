@@ -20,26 +20,30 @@ class CoinSocket: NSObject, ObservableObject {
     private let session = URLSession(configuration: .default)
     private var task: URLSessionWebSocketTask?
     
+    
     override init() {
         super.init()
-        self.connect()
-        self.recieve()
+        self.connect("wss://ws.coincap.io/prices?assets=bitcoin")
+        self.receive()
     }
     
-    func connect() {
-        let url = URL(string: "wss://ws.coincap.io/prices?assets=bitcoin")!
+    func connect(_ urlString: String) {
+        let url = URL(string: urlString)!
         task = session.webSocketTask(with: url)
         task?.delegate = self
         task?.resume()
     }
     
-    func recieve() {
+    func receive() {
         task?.receive(completionHandler: { result in
             switch result {
             case .success(let success):
                 switch success {
                 case .data(let data):
-                    break
+                    guard let response = try? JSONDecoder().decode(SocketResponse.self, from: data) else { return }
+                    Task { @MainActor in
+                        self.bitcoinPrice = response.bitcoin
+                    }
                     
                 case .string(let string):
                     guard
@@ -50,14 +54,33 @@ class CoinSocket: NSObject, ObservableObject {
                         self.bitcoinPrice = response.bitcoin
                     }
                     
-                @unknown default:
+                default:
                     break
                 }
-                self.recieve()
+                self.receive()
             case .failure(let failure):
                 print("Error: ", failure)
             }
         })
+    }
+    
+    func send(_ message: String) {
+        let message = URLSessionWebSocketTask.Message.string(message)
+        task?.send(message) { error in
+            if let error = error {
+                print("Error sending message: \(error)")
+            }
+        }
+    }
+    
+    func send(_ image: UIImage) {
+        guard let imageData = image.jpegData(compressionQuality: 1.0) else { return }
+        let message = URLSessionWebSocketTask.Message.data(imageData)
+        task?.send(message) { error in
+            if let error = error {
+                print("Error sending image: \(error)")
+            }
+        }
     }
     
     func disconnect() {
@@ -68,10 +91,6 @@ class CoinSocket: NSObject, ObservableObject {
     deinit {
         self.disconnect()
     }
-}
-
-struct SocketResponse: Codable {
-    let bitcoin: String
 }
 
 extension CoinSocket: URLSessionWebSocketDelegate {
@@ -87,4 +106,8 @@ extension CoinSocket: URLSessionWebSocketDelegate {
             self.isConnected = false
         }
     }
+}
+
+struct SocketResponse: Codable {
+    let bitcoin: String
 }
