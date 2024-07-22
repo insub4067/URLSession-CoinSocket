@@ -16,6 +16,7 @@ class CoinSocket: NSObject, ObservableObject {
     
     @Published var isConnected = false
     @Published var bitcoinPrice = ""
+    var pingCount = 0
     
     private let session = URLSession(configuration: .default)
     private var task: URLSessionWebSocketTask?
@@ -23,15 +24,16 @@ class CoinSocket: NSObject, ObservableObject {
     
     override init() {
         super.init()
-        self.connect("wss://ws.coincap.io/prices?assets=bitcoin")
+        self.connect()
         self.receive()
     }
     
-    func connect(_ urlString: String) {
-        let url = URL(string: urlString)!
+    func connect() {
+        let url = URL(string: "wss://ws.coincap.io/prices?assets=bitcoin")!
         task = session.webSocketTask(with: url)
         task?.delegate = self
         task?.resume()
+        self.startPing()
     }
     
     func receive() {
@@ -83,9 +85,35 @@ class CoinSocket: NSObject, ObservableObject {
         }
     }
     
+    func startPing() {
+        Task { [weak self] in
+            guard let id = self?.task?.taskIdentifier else { return }
+            try await Task.sleep(for: .seconds(5))
+            
+            guard let self, self.task?.taskIdentifier == id else { return }
+            if self.task?.state == .running, self.pingCount < 2  {
+                self.pingCount += 1
+                self.task?.sendPing(pongReceiveHandler: { [weak self] _ in
+                    if self?.task?.taskIdentifier == id {
+                        self?.pingCount = 0
+                    }
+                })
+                self.startPing()
+            } else {
+                self.reconnect()
+            }
+        }
+    }
+    
+    func reconnect() {
+        self.disconnect()
+        self.connect()
+    }
+    
     func disconnect() {
         self.task?.cancel()
         self.task = nil
+        self.pingCount = 0
     }
     
     deinit {
